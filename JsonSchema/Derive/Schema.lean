@@ -239,11 +239,34 @@ def mkInductiveHasJSONSchemaInstanceCmd (declName : Name) : CommandElabM Bool :=
     let term ← liftTermElabM <|
       forallTelescopeReducing ctorInfo.type fun xs _ => do
         let keyStx := Syntax.mkStrLit ctorShortName
-        if numArgs == 1 then
+        -- Lean's `deriving ToJson` encoding depends on whether constructor args
+        -- are explicitly named:
+        --   Named   `| foo (x : Nat) (y : String)` → `{"foo": {"x": 1, "y": "hi"}}`
+        --   Unnamed `| foo : Nat → String → T`      → `{"foo": [1, "hi"]}` or `{"foo": 5}`
+        -- Detect via Name.isInternal on the first arg's binder name.
+        let firstArgName ← xs[analysis.indVal.numParams]!.fvarId!.getUserName
+        let hasNamedArgs := !firstArgName.isInternal
+        if hasNamedArgs then
+          -- Named args: inner objectSchema with field names matching ToJson encoding
+          let mut fieldSchemas : Array (TSyntax `term) := #[]
+          let mut fieldNames : Array (TSyntax `term) := #[]
+          for i in [:numArgs] do
+            let param := xs[analysis.indVal.numParams + i]!
+            let fieldName := (← param.fvarId!.getUserName).toString
+            let fieldNameStx := Syntax.mkStrLit fieldName
+            let argType ← inferType param
+            let schemaTerm ← mkSchemaTermForType argType declName
+            fieldSchemas := fieldSchemas.push (← `(term| ($fieldNameStx, $schemaTerm)))
+            fieldNames := fieldNames.push fieldNameStx
+          let innerSchema ← `(term| objectSchema [$fieldSchemas,*] [$fieldNames,*])
+          `(term| objectSchema [($keyStx, $innerSchema)] [$keyStx])
+        else if numArgs == 1 then
+          -- Unnamed single arg: direct value (e.g., `{"minLength": 5}`)
           let argType ← inferType xs[analysis.indVal.numParams]!
           let schemaTerm ← mkSchemaTermForType argType declName
           `(term| objectSchema [($keyStx, $schemaTerm)] [$keyStx])
         else
+          -- Unnamed multi args: positional tuple (e.g., `{"foo": [1, "hi"]}`)
           let mut argSchemaTerms : Array (TSyntax `term) := #[]
           for i in [:numArgs] do
             let argType ← inferType xs[analysis.indVal.numParams + i]!

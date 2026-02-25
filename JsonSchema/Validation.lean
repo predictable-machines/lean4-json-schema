@@ -118,17 +118,17 @@ def validateJson (schema : JSONSchema) (json : Json) : Except ValidationError Un
   | .array =>
       match json with
       | .arr items =>
-          match hpi : schema.prefixItems with
+          match _hpi : schema.prefixItems with
           | some prefixSchemas =>
               match validatePrefixItems prefixSchemas items.toList 0 with
               | .error e => .error e
               | .ok () =>
-                  match hi : schema.items with
+                  match _hi : schema.items with
                   | some itemSchema =>
                       validateArrayItems itemSchema (items.toList.drop prefixSchemas.length) 0
                   | none => .ok ()
           | none =>
-              match hi : schema.items with
+              match _hi : schema.items with
               | some itemSchema => validateArrayItems itemSchema items.toList 0
               | none => .ok ()
       | _ => .error (.typeMismatch "array" (jsonTypeName json))
@@ -139,7 +139,7 @@ def validateJson (schema : JSONSchema) (json : Json) : Except ValidationError Un
           match checkRequired schema.required json with
           | .error e => .error e
           | .ok () =>
-            match hp : schema.properties with
+            match _hp : schema.properties with
             | some props =>
                 match checkUnknownFields obj.toList props with
                 | .error e => .error e
@@ -155,7 +155,7 @@ def validateJson (schema : JSONSchema) (json : Json) : Except ValidationError Un
   | .any => .ok ()
 
   | .oneOf =>
-      match ho : schema.oneOf with
+      match _ho : schema.oneOf with
       | some schemas => validateOneOfSchemas schemas json
       | none => .ok ()
 termination_by (sizeOf schema, 0)
@@ -163,10 +163,10 @@ decreasing_by
   all_goals simp_wf
   all_goals first
     | omega
-    | (have := JSONSchema.sizeOf_items_lt _ _ hi; omega)
-    | (have := JSONSchema.sizeOf_prefixItems_lt _ _ hpi; omega)
-    | (have := JSONSchema.sizeOf_properties_lt _ _ hp; omega)
-    | (have := JSONSchema.sizeOf_oneOf_lt _ _ ho; omega)
+    | (have := JSONSchema.sizeOf_items_lt _ _ _hi; omega)
+    | (have := JSONSchema.sizeOf_prefixItems_lt _ _ _hpi; omega)
+    | (have := JSONSchema.sizeOf_properties_lt _ _ _hp; omega)
+    | (have := JSONSchema.sizeOf_oneOf_lt _ _ _ho; omega)
 
 /-- Validate array items against positional schemas (JSON Schema prefixItems). -/
 def validatePrefixItems (schemas : List JSONSchema) (items : List Json) (idx : Nat)

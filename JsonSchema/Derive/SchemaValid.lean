@@ -219,11 +219,73 @@ private def mkTupleHValid (numArgs : Nat) (proofs : Array (TSyntax `term))
   tacs := tacs.push tupleExact
   return tacs
 
+/-- Like `mkObjBridgeHave` but binds to `_namedObj` instead of `_inner`.
+    Used for the inner objectSchema proof in named-arg constructors, where the
+    outer object wraps an inner object of named fields. -/
+private def mkNamedObjBridgeHave
+    (objSchema jsonValue : TSyntax `term)
+    (hValidBody : Array (TSyntax `tactic))
+    : CommandElabM (TSyntax `tactic) :=
+  `(tactic|
+    have _namedObj : validateJson ($objSchema) ($jsonValue) = .ok () :=
+      validateJson_mkObj_objectSchema _ _ _
+        (by simp only [List.map]; decide)
+        (hReq_of_map_fst _ _ rfl)
+        (by intro k hk; simp only [List.map] at hk ⊢; exact hk)
+        (by $hValidBody*))
+
+/-- Build the hValid callback for named-arg constructors' inner objectSchema.
+    Peels one field at a time (like the struct handler). Each branch uses `first`
+    with a fallback to the precomputed proof from `mkValidationProofTerm`,
+    supporting both non-recursive fields (closed by `simp_all`) and recursive
+    fields (closed by `exact $proof`). -/
+private def mkNamedArgsInnerHValid (numFields : Nat) (proofs : Array (TSyntax `term))
+    : CommandElabM (Array (TSyntax `tactic)) := do
+  let mut tacs : Array (TSyntax `tactic) := #[]
+  tacs := tacs.push (← `(tactic| intro name schema hns v hv))
+  tacs := tacs.push (← `(tactic|
+      simp only [List.mem_cons, Prod.mk.injEq, List.mem_nil_iff, or_false] at hns))
+  for i in [:(numFields - 1)] do
+    let fieldProof := proofs[i]!
+    tacs := tacs.push (← `(tactic|
+      rcases hns with ⟨rfl, rfl⟩ | hns <;>
+        try first
+          | (simp_all [ValidatesAgainstSchema.valid]; done)
+          | (simp_all only [List.mem_cons, Prod.mk.injEq, List.mem_nil_iff, or_false]
+             exact $fieldProof)))
+  -- Final field
+  let lastProof := proofs[numFields - 1]!
+  tacs := tacs.push (← `(tactic| try obtain ⟨rfl, rfl⟩ := hns))
+  tacs := tacs.push (← `(tactic|
+    try first
+      | (simp_all [ValidatesAgainstSchema.valid]; done)
+      | (simp_all only [List.mem_cons, Prod.mk.injEq, List.mem_nil_iff, or_false]
+         exact $lastProof)))
+  return tacs
+
+/-- Build the hValid callback for the outer objectSchema of a named-arg constructor.
+    The outer object has exactly one property (the constructor name). After deconstructing
+    the membership hypotheses, the goal reduces to `_namedObj` (the inner proof bound by
+    `mkNamedObjBridgeHave`). -/
+private def mkNamedArgsOuterHValid : CommandElabM (Array (TSyntax `tactic)) := do
+  pure #[
+    ← `(tactic| intro name schema hns v hv),
+    ← `(tactic|
+        simp only [List.mem_cons, Prod.mk.injEq, List.mem_nil_iff, or_false] at hns hv),
+    ← `(tactic| obtain ⟨h1, h2⟩ := hns),
+    ← `(tactic| subst h1),
+    ← `(tactic| subst h2),
+    ← `(tactic| obtain ⟨-, h3⟩ := hv),
+    ← `(tactic| subst h3),
+    ← `(tactic| exact _namedObj)]
+
 /-- Generate `ValidatesAgainstSchema` for an inductive with arg-carrying constructors.
     Proof strategies per constructor:
     - Zero-arg: `native_decide` (fully concrete)
-    - Single-arg: `validateJson_oneOfSchema_correct` + `validateJson_mkObj_objectSchema`
-    - Multi-arg: same outer structure + `validateJson_tupleSchema_pair/triple/quad` -/
+    - Named-arg (any arity): nested `validateJson_mkObj_objectSchema` for both outer
+      and inner objectSchemas, with `_namedObj` binding the inner proof
+    - Unnamed single-arg: `validateJson_oneOfSchema_correct` + `validateJson_mkObj_objectSchema`
+    - Unnamed multi-arg: same outer structure + `validateJson_tupleSchema_pair/triple/quad` -/
 def mkInductiveValidatesInstanceCmd (declName : Name) : CommandElabM Bool := do
   let some analysis ← analyzeInductive declName | return false
   unless analysis.hasArgCarrying do return false
@@ -242,6 +304,9 @@ def mkInductiveValidatesInstanceCmd (declName : Name) : CommandElabM Bool := do
   let mut schemaTerms : Array (TSyntax `term) := #[]
   let mut argCarryingSchemas : Array (TSyntax `term) := #[]
   let mut argCarryingProofs : Array (Array (TSyntax `term)) := #[]
+  -- For named-arg constructors: some (innerObjectSchema, fieldNames).
+  -- none for unnamed-arg constructors. Mirrors the `hasNamedArgs` check in Schema.lean.
+  let mut argCarryingNamedInfo : Array (Option (TSyntax `term × Array String)) := #[]
   if analysis.hasZeroArgs then
     let enumVals ← analysis.zeroArgCtorNames.mapM fun val =>
       `(term| $(Syntax.mkStrLit val))
@@ -250,15 +315,41 @@ def mkInductiveValidatesInstanceCmd (declName : Name) : CommandElabM Bool := do
   for (ctorInfo, numArgs) in analysis.ctorInfos.zip analysis.argCounts do
     if numArgs == 0 then continue
     let ctorShortName := ctorInfo.name.getString!
-    let (ctorSchema, proofs) ← liftTermElabM <|
+    let (ctorSchema, proofs, namedInfo) ← liftTermElabM <|
       forallTelescopeReducing ctorInfo.type fun xs _ => do
       let keyStx := Syntax.mkStrLit ctorShortName
-      if numArgs == 1 then
+      -- Detect named vs unnamed args (same heuristic as Schema.lean).
+      -- Lean doesn't allow mixing named and unnamed binders in a single constructor,
+      -- so checking only the first arg is sufficient.
+      let firstArgName ← xs[analysis.indVal.numParams]!.fvarId!.getUserName
+      let hasNamedArgs := !firstArgName.isInternal
+      if hasNamedArgs then
+        -- Named args: inner objectSchema with field names matching ToJson encoding.
+        -- ToJson encodes `| ctor (f1 : T1) (f2 : T2)` as `{"ctor": {"f1": v1, "f2": v2}}`.
+        let mut innerSchemaEntries : Array (TSyntax `term) := #[]
+        let mut innerFieldNames : Array (TSyntax `term) := #[]
+        let mut fieldNameStrs : Array String := #[]
+        let mut proofTerms : Array (TSyntax `term) := #[]
+        for i in [:numArgs] do
+          let param := xs[analysis.indVal.numParams + i]!
+          let fieldName := (← param.fvarId!.getUserName).toString
+          let fieldNameStx := Syntax.mkStrLit fieldName
+          let argType ← inferType param
+          let schemaTerm ← mkSchemaTermForType argType declName
+          let proofTerm ← mkValidationProofTerm argType declName
+          innerSchemaEntries := innerSchemaEntries.push (← `(term| ($fieldNameStx, $schemaTerm)))
+          innerFieldNames := innerFieldNames.push fieldNameStx
+          fieldNameStrs := fieldNameStrs.push fieldName
+          proofTerms := proofTerms.push proofTerm
+        let innerSchema ← `(term| objectSchema [$innerSchemaEntries,*] [$innerFieldNames,*])
+        let schema ← `(term| objectSchema [($keyStx, $innerSchema)] [$keyStx])
+        pure (schema, proofTerms, some (innerSchema, fieldNameStrs))
+      else if numArgs == 1 then
         let argType ← inferType xs[analysis.indVal.numParams]!
         let schemaTerm ← mkSchemaTermForType argType declName
         let proofTerm ← mkValidationProofTerm argType declName
         let schema ← `(term| objectSchema [($keyStx, $schemaTerm)] [$keyStx])
-        pure (schema, #[proofTerm])
+        pure (schema, #[proofTerm], none)
       else
         let mut argSchemaTerms : Array (TSyntax `term) := #[]
         let mut proofTerms : Array (TSyntax `term) := #[]
@@ -270,10 +361,11 @@ def mkInductiveValidatesInstanceCmd (declName : Name) : CommandElabM Bool := do
             (← mkValidationProofTerm argType declName)
         let schema ←
           `(term| objectSchema [($keyStx, tupleSchema [$argSchemaTerms,*])] [$keyStx])
-        pure (schema, proofTerms)
+        pure (schema, proofTerms, none)
     schemaTerms := schemaTerms.push ctorSchema
     argCarryingSchemas := argCarryingSchemas.push ctorSchema
     argCarryingProofs := argCarryingProofs.push proofs
+    argCarryingNamedInfo := argCarryingNamedInfo.push namedInfo
 
   let oneOfTerm ← if analysis.isRecursive then do
     let refNameStx := Syntax.mkStrLit declName.getString!
@@ -320,48 +412,102 @@ def mkInductiveValidatesInstanceCmd (declName : Name) : CommandElabM Bool := do
       -- resolves all metavariables before the `by` tactic blocks run.
       let objSchema := argCarryingSchemas[argCarryingIdx]!
       let proofs := argCarryingProofs[argCarryingIdx]!
+      let namedInfo := argCarryingNamedInfo[argCarryingIdx]!
       let oneOfExact ← mkOneOfExact memProof (← `(term| _inner))
 
-      -- Build the JSON value encoding for this constructor.
+      -- Build per-constructor proof. Named-arg constructors need a nested bridge
+      -- (_namedObj for the inner objectSchema), while unnamed use the existing
+      -- single-arg or tuple strategies.
       -- Uses literal idents in quotation so they share the macro scope with the
       -- `next` binder — `mkIdent` would create scope-free idents that don't match.
-      let jsonValue ← match numArgs with
-        | 1 => `(term| Json.mkObj [($keyStx, toJson _x)])
-        | 2 => `(term| Json.mkObj [($keyStx, toJson (_x, _y))])
-        | 3 => `(term| Json.mkObj [($keyStx, Json.arr #[toJson _x, toJson _y, toJson _z])])
-        | 4 => `(term| Json.mkObj [($keyStx, Json.arr #[toJson _x, toJson _y, toJson _z, toJson _w])])
-        | _ => throwError "'deriving ValidatesAgainstSchema' unsupported: constructor \
-            '{ctorShortName}' has {numArgs} arguments (max 4)"
-
-      -- Build the hValid callback (per-property validation proof)
-      let hValidBody ← if numArgs == 1 then do
-        let argProof := proofs[0]!
-        pure #[← `(tactic| intro name schema hns v hv),
-               ← `(tactic| simp only [List.mem_cons, Prod.mk.injEq,
-                                       List.mem_nil_iff, or_false] at hns),
-               ← `(tactic| obtain ⟨rfl, rfl⟩ := hns),
-               -- simp_all handles non-recursive + direct recursive args.
-               -- Fall back to pre-computed proof for wrapped-recursive args
-               -- (e.g., Prod-wrapped recursion like `String × RecType`).
-               -- `done` ensures simp_all fully closes the goal; without it,
-               -- partial progress (e.g., substituting hv) tricks `first`
-               -- into skipping the fallback.
-               ← `(tactic| first
-                  | (simp_all [ValidatesAgainstSchema.valid]; done)
-                  | (simp_all only [List.mem_cons, Prod.mk.injEq,
-                                    List.mem_nil_iff, or_false]
-                     exact $argProof))]
-      else
-        mkTupleHValid numArgs proofs
-
-      let bridgeHave ← mkObjBridgeHave objSchema jsonValue hValidBody
-
-      -- Assemble: show + bridge have + oneOfExact, with per-arity binders.
-      -- Literal idents in quotation share the ambient macro scope, ensuring the
-      -- `next` binder and `jsonValue`/`mkTupleHValid` references resolve to the
-      -- same variables. Programmatic `mkIdent` creates scope-free idents that
-      -- would mismatch — hence the arity-specific patterns.
-      let tac ← match numArgs with
+      let tac ← match namedInfo with
+      | some (innerSchema, fieldNames) =>
+        -- Named args: JSON encoding is {"ctor": {"f1": v1, "f2": v2, ...}}
+        -- Proof: _namedObj proves inner objectSchema, _inner proves outer.
+        let innerJsonValue ← match numArgs with
+          | 1 => do
+            let f0 := Syntax.mkStrLit fieldNames[0]!
+            `(term| Json.mkObj [($f0, toJson _x)])
+          | 2 => do
+            let f0 := Syntax.mkStrLit fieldNames[0]!
+            let f1 := Syntax.mkStrLit fieldNames[1]!
+            `(term| Json.mkObj [($f0, toJson _x), ($f1, toJson _y)])
+          | 3 => do
+            let f0 := Syntax.mkStrLit fieldNames[0]!
+            let f1 := Syntax.mkStrLit fieldNames[1]!
+            let f2 := Syntax.mkStrLit fieldNames[2]!
+            `(term| Json.mkObj [($f0, toJson _x), ($f1, toJson _y), ($f2, toJson _z)])
+          | 4 => do
+            let f0 := Syntax.mkStrLit fieldNames[0]!
+            let f1 := Syntax.mkStrLit fieldNames[1]!
+            let f2 := Syntax.mkStrLit fieldNames[2]!
+            let f3 := Syntax.mkStrLit fieldNames[3]!
+            `(term| Json.mkObj [($f0, toJson _x), ($f1, toJson _y),
+                                ($f2, toJson _z), ($f3, toJson _w)])
+          | _ => throwError "'deriving ValidatesAgainstSchema' unsupported: constructor \
+              '{ctorShortName}' has {numArgs} named arguments (max 4)"
+        let jsonValue ← `(term| Json.mkObj [($keyStx, $innerJsonValue)])
+        let innerHValid ← mkNamedArgsInnerHValid numArgs proofs
+        let namedObjHave ← mkNamedObjBridgeHave innerSchema innerJsonValue innerHValid
+        let outerHValid ← mkNamedArgsOuterHValid
+        let bridgeHave ← mkObjBridgeHave objSchema jsonValue outerHValid
+        match numArgs with
+        | 1 => `(tactic| next _x =>
+            show validateJson $oneOfTerm ($jsonValue) = .ok ()
+            $namedObjHave
+            $bridgeHave
+            $oneOfExact)
+        | 2 => `(tactic| next _x _y =>
+            show validateJson $oneOfTerm ($jsonValue) = .ok ()
+            $namedObjHave
+            $bridgeHave
+            $oneOfExact)
+        | 3 => `(tactic| next _x _y _z =>
+            show validateJson $oneOfTerm ($jsonValue) = .ok ()
+            $namedObjHave
+            $bridgeHave
+            $oneOfExact)
+        | 4 => `(tactic| next _x _y _z _w =>
+            show validateJson $oneOfTerm ($jsonValue) = .ok ()
+            $namedObjHave
+            $bridgeHave
+            $oneOfExact)
+        | _ => unreachable!
+      | none =>
+        -- Unnamed args: existing single-arg / tuple strategies
+        let jsonValue ← match numArgs with
+          | 1 => `(term| Json.mkObj [($keyStx, toJson _x)])
+          | 2 => `(term| Json.mkObj [($keyStx, toJson (_x, _y))])
+          | 3 => `(term| Json.mkObj [($keyStx, Json.arr #[toJson _x, toJson _y, toJson _z])])
+          | 4 => `(term| Json.mkObj [($keyStx, Json.arr #[toJson _x, toJson _y, toJson _z, toJson _w])])
+          | _ => throwError "'deriving ValidatesAgainstSchema' unsupported: constructor \
+              '{ctorShortName}' has {numArgs} arguments (max 4)"
+        let hValidBody ← if numArgs == 1 then do
+          let argProof := proofs[0]!
+          pure #[← `(tactic| intro name schema hns v hv),
+                 ← `(tactic| simp only [List.mem_cons, Prod.mk.injEq,
+                                         List.mem_nil_iff, or_false] at hns),
+                 ← `(tactic| obtain ⟨rfl, rfl⟩ := hns),
+                 -- simp_all handles non-recursive + direct recursive args.
+                 -- Fall back to pre-computed proof for wrapped-recursive args
+                 -- (e.g., Prod-wrapped recursion like `String × RecType`).
+                 -- `done` ensures simp_all fully closes the goal; without it,
+                 -- partial progress (e.g., substituting hv) tricks `first`
+                 -- into skipping the fallback.
+                 ← `(tactic| first
+                    | (simp_all [ValidatesAgainstSchema.valid]; done)
+                    | (simp_all only [List.mem_cons, Prod.mk.injEq,
+                                      List.mem_nil_iff, or_false]
+                       exact $argProof))]
+        else
+          mkTupleHValid numArgs proofs
+        let bridgeHave ← mkObjBridgeHave objSchema jsonValue hValidBody
+        -- Assemble: show + bridge have + oneOfExact, with per-arity binders.
+        -- Literal idents in quotation share the ambient macro scope, ensuring the
+        -- `next` binder and `jsonValue`/`mkTupleHValid` references resolve to the
+        -- same variables. Programmatic `mkIdent` creates scope-free idents that
+        -- would mismatch — hence the arity-specific patterns.
+        match numArgs with
         | 1 => `(tactic| next _x =>
             show validateJson $oneOfTerm ($jsonValue) = .ok ()
             $bridgeHave

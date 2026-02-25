@@ -94,6 +94,48 @@ private inductive TestDay where
   deriving HasJSONSchema, ToJson, ValidatesAgainstSchema
 
 -- ============================================================================
+-- Named-arg constructors (binder-style: `| ctor (field : Type)`)
+-- ============================================================================
+
+-- Single named arg: ToJson encodes as {"answer": {"value": 42}}
+private inductive TestNamedSingle where
+  | answer (value : Nat)
+  | explanation (text : String)
+  | unknown
+  deriving HasJSONSchema, ToJson, ValidatesAgainstSchema
+
+-- Multi named args: ToJson encodes as {"detailed": {"severity": "...", "payload": 42}}
+private inductive TestNamedMulti where
+  | simple (tag : String)
+  | detailed (severity : String) (payload : Nat)
+  deriving HasJSONSchema, ToJson, ValidatesAgainstSchema
+
+-- Named args with 3 fields
+private inductive TestNamed3 where
+  | entry (name : String) (count : Nat) (active : Bool)
+  deriving HasJSONSchema, ToJson, ValidatesAgainstSchema
+
+-- Named args with 4 fields (max supported arity)
+private inductive TestNamed4 where
+  | record (a : String) (b : Nat) (c : Bool) (d : Int)
+  deriving HasJSONSchema, ToJson, ValidatesAgainstSchema
+
+-- Named args with nested type (struct-valued field)
+private inductive TestNamedNested where
+  | empty
+  | withPerson (person : TestPerson)
+  | labeled (label : String) (person : TestPerson)
+  deriving HasJSONSchema, ToJson, ValidatesAgainstSchema
+
+-- Mixed: some constructors use named args, others use arrow-style.
+-- The per-constructor `hasNamedArgs` check must classify each independently.
+private inductive TestMixedStyle where
+  | named (x : Nat) (y : String)
+  | unnamed : Bool → Nat → TestMixedStyle
+  | plain
+  deriving HasJSONSchema, ToJson, ValidatesAgainstSchema
+
+-- ============================================================================
 -- Recursive inductive types
 -- ============================================================================
 
@@ -426,6 +468,14 @@ example : ValidatesAgainstSchema TestOptionalInductive := inferInstance
 example : ValidatesAgainstSchema TestArrayOfEnums := inferInstance
 example : ValidatesAgainstSchema TestResponse := inferInstance
 example : ValidatesAgainstSchema TestNestedPayload := inferInstance
+
+-- Named-arg constructors
+example : ValidatesAgainstSchema TestNamedSingle := inferInstance
+example : ValidatesAgainstSchema TestNamedMulti := inferInstance
+example : ValidatesAgainstSchema TestNamed3 := inferInstance
+example : ValidatesAgainstSchema TestNamed4 := inferInstance
+example : ValidatesAgainstSchema TestNamedNested := inferInstance
+example : ValidatesAgainstSchema TestMixedStyle := inferInstance
 
 -- Single-constructor inductives
 example : ValidatesAgainstSchema TestWrapper := inferInstance

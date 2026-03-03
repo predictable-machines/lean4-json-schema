@@ -1,5 +1,5 @@
-import PredictableJsonSchema.Correctness.Soundness
-import PredictableJsonSchema.Correctness.Completeness
-import PredictableJsonSchema.Correctness.Serialization
-import PredictableJsonSchema.Correctness.Bridge
-import PredictableJsonSchema.Correctness.ValidatesAgainstSchema
+import JsonSchema.Correctness.Soundness
+import JsonSchema.Correctness.Completeness
+import JsonSchema.Correctness.Serialization
+import JsonSchema.Correctness.Bridge
+import JsonSchema.Correctness.ValidatesAgainstSchema

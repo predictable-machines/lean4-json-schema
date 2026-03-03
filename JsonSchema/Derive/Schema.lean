@@ -1,5 +1,5 @@
 import Lean
-import PredictableJsonSchema.Schema
+import JsonSchema.Schema
 
 namespace JsonSchema.Derive
 

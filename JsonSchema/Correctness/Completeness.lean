@@ -1,5 +1,5 @@
-import PredictableJsonSchema.Schema
-import PredictableJsonSchema.Validation
+import JsonSchema.Schema
+import JsonSchema.Validation
 
 namespace JsonSchema
 

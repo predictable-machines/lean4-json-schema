@@ -1,5 +1,5 @@
 import Lean.Data.Json
-import PredictableJsonSchema.Schema
+import JsonSchema.Schema
 
 namespace JsonSchema
 

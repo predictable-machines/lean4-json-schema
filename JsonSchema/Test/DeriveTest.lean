@@ -1,4 +1,4 @@
-import PredictableJsonSchema.Derive.SchemaValid
+import JsonSchema.Derive.SchemaValid
 
 namespace JsonSchema.DeriveSchemaValid.Test
 

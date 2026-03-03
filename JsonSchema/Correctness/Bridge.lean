@@ -1,6 +1,6 @@
-import PredictableJsonSchema.Schema
-import PredictableJsonSchema.Validation
-import PredictableJsonSchema.Correctness.Soundness
+import JsonSchema.Schema
+import JsonSchema.Validation
+import JsonSchema.Correctness.Soundness
 import Std.Data.TreeMap.Raw.Lemmas
 
 namespace JsonSchema

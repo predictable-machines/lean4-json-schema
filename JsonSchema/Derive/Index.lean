@@ -1,2 +1,2 @@
-import PredictableJsonSchema.Derive.Schema
-import PredictableJsonSchema.Derive.SchemaValid
+import JsonSchema.Derive.Schema
+import JsonSchema.Derive.SchemaValid

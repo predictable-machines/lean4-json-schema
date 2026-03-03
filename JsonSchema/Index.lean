@@ -1,4 +1,4 @@
-import PredictableJsonSchema.Schema
-import PredictableJsonSchema.Validation
-import PredictableJsonSchema.Correctness.Index
-import PredictableJsonSchema.Derive.Index
+import JsonSchema.Schema
+import JsonSchema.Validation
+import JsonSchema.Correctness.Index
+import JsonSchema.Derive.Index

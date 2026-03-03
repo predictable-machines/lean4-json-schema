@@ -1,10 +1,10 @@
 import Lean
-import PredictableJsonSchema.Schema
-import PredictableJsonSchema.Validation
-import PredictableJsonSchema.Correctness.Soundness
-import PredictableJsonSchema.Correctness.Bridge
-import PredictableJsonSchema.Correctness.ValidatesAgainstSchema
-import PredictableJsonSchema.Derive.Schema
+import JsonSchema.Schema
+import JsonSchema.Validation
+import JsonSchema.Correctness.Soundness
+import JsonSchema.Correctness.Bridge
+import JsonSchema.Correctness.ValidatesAgainstSchema
+import JsonSchema.Derive.Schema
 
 namespace JsonSchema.Derive
 

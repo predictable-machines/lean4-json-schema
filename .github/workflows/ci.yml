@@ -9,7 +9,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: leanprover/lean4-action@v1
+      - uses: leanprover/lean-action@v1
         with:
-          toolchain-file: lean-toolchain
-      - run: lake build
+          build: true

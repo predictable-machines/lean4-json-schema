@@ -1,6 +1,9 @@
 # lean4-json-schema
 
-A Lean 4 library for JSON Schema — types, validation, correctness proofs, and deriving handlers.
+A Lean 4 library for [JSON Schema](https://json-schema.org/) with types, validation, correctness proofs, and type class deriving handlers.
+
+> [!WARNING]
+> This library is under active development and **does not yet fully cover the JSON Schema standard**. We are actively using it to build [Predictable Code](https://predictablemachines.com/tools/predictable-code/), but the API surface, type definitions, and proof interfaces may change without notice. The current correctness proofs might not cover the full extent of the functionality provided in the library. Use at your own discretion.
 
 ## Features
 

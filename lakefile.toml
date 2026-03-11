@@ -1,0 +1,7 @@
+name = "json-schema"
+version = "0.2.0"
+defaultTargets = ["JsonSchema"]
+
+[[lean_lib]]
+name = "JsonSchema"
+roots = ["JsonSchema"]

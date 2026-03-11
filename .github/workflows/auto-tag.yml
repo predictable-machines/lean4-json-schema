@@ -1,0 +1,43 @@
+name: Auto Tag
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  auto-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from lakefile
+        id: version
+        run: |
+          version=$(grep -oP '^version\s*=\s*"\K[^"]+' lakefile.toml)
+          if [ -z "$version" ]; then
+            echo "Failed to extract version from lakefile.toml" >&2
+            exit 1
+          fi
+          echo "version=v${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if tag exists
+        id: check
+        run: |
+          if git rev-parse "refs/tags/${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create tag
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git config user.name "Predictable Machines"
+          git config user.email "oss@predictablemachines.com"
+          git tag -a "${{ steps.version.outputs.version }}" -m "${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.version }}"

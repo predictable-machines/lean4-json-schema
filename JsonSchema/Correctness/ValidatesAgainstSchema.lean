@@ -63,7 +63,7 @@ theorem validateArrayItems_of_forall
 instance [HasJSONSchema α] [ToJson α] [ValidatesAgainstSchema α]
     : ValidatesAgainstSchema (Array α) where
   valid arr := by
-    simp only [HasJSONSchema.toSchema, toJson, Array.toJson, validateJson]
+    simp only [HasJSONSchema.toSchema, toJson, Lean.Array.toJson, validateJson]
     rw [Array.toList_map]
     exact validateArrayItems_of_forall _ arr.toList
       (fun a _ => ValidatesAgainstSchema.valid a) 0
@@ -71,7 +71,7 @@ instance [HasJSONSchema α] [ToJson α] [ValidatesAgainstSchema α]
 instance [HasJSONSchema α] [ToJson α] [ValidatesAgainstSchema α]
     : ValidatesAgainstSchema (List α) where
   valid xs := by
-    simp only [HasJSONSchema.toSchema, toJson, List.toJson, Array.toJson,
+    simp only [HasJSONSchema.toSchema, toJson, Lean.List.toJson, Lean.Array.toJson,
       validateJson]
     rw [Array.toList_map, List.toList_toArray]
     exact validateArrayItems_of_forall _ xs
@@ -82,12 +82,12 @@ instance [HasJSONSchema α] [ToJson α] [ValidatesAgainstSchema α]
     : ValidatesAgainstSchema (Option α) where
   valid
     | some a => by
-      simp only [HasJSONSchema.toSchema, toJson, Option.toJson]
+      simp only [HasJSONSchema.toSchema, toJson, Lean.Option.toJson]
       unfold validateJson validateOneOfSchemas
       simp only
       rw [ValidatesAgainstSchema.valid (α := α)]
     | none => by
-      simp only [HasJSONSchema.toSchema, toJson, Option.toJson]
+      simp only [HasJSONSchema.toSchema, toJson, Lean.Option.toJson]
       unfold validateJson validateOneOfSchemas
       simp only
       -- The first oneOf branch (toSchema α on null) is abstract; split on its result
